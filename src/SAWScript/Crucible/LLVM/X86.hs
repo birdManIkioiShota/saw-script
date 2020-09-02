@@ -55,7 +55,6 @@ import Data.Parameterized.Nonce
 
 import Verifier.SAW.CryptolEnv
 import Verifier.SAW.FiniteValue
-import Verifier.SAW.Recognizer
 import Verifier.SAW.SharedTerm
 import Verifier.SAW.TypedTerm
 
@@ -591,7 +590,7 @@ assumeAllocation ::
   Map MS.AllocIndex Ptr ->
   (MS.AllocIndex, LLVMAllocSpec) {- ^ crucible_alloc statement -} ->
   X86Sim (Map MS.AllocIndex Ptr)
-assumeAllocation env (i, LLVMAllocSpec mut _memTy align sz loc) = do
+assumeAllocation env (i, LLVMAllocSpec mut _memTy align sz loc False) = do
   cc <- use x86CrucibleContext
   sym <- use x86Sym
   mem <- use x86Mem
@@ -600,6 +599,9 @@ assumeAllocation env (i, LLVMAllocSpec mut _memTy align sz loc) = do
     (show $ W4.plSourceLoc loc) mem sz' align
   x86Mem .= mem'
   pure $ Map.insert i ptr env
+assumeAllocation env _ = pure env
+  -- no allocation is done for crucible_fresh_pointer
+  -- TODO: support crucible_fresh_pointer in x86 verification
 
 -- | Process a crucible_points_to statement, writing some SetupValue to a pointer.
 assumePointsTo ::
@@ -743,12 +745,14 @@ assertPost globals env premem preregs = do
         $ ms ^. MS.csPostState . MS.csConditions
 
   let
-    initialTerms = Map.fromList
-      [ (ecVarIndex ec, ttTerm tt)
+    initialECs = Map.fromList
+      [ (ecVarIndex ec, ec)
       | tt <- ms ^. MS.csPreState . MS.csFreshVars
-      , let Just ec = asExtCns (ttTerm tt)
+      , let ec = tecExt tt
       ]
-    initialFree = Set.fromList . fmap (LO.termId . ttTerm) $ ms ^. MS.csPostState . MS.csFreshVars
+    initialFree = Set.fromList . fmap (ecVarIndex . tecExt) $ ms ^. MS.csPostState . MS.csFreshVars
+
+  initialTerms <- liftIO $ traverse (scExtCns sc) initialECs
 
   result <- liftIO
     . O.runOverrideMatcher sym globals env initialTerms initialFree (ms ^. MS.csLoc)
